@@ -1,11 +1,23 @@
 import json
 import os
+import time
+import uuid
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+
+try:
+    from pyspark.sql import SparkSession
+except ImportError as pyspark_import_error:  # pragma: no cover
+    SparkSession = None  # type: ignore[assignment]
+    _PYSPARK_IMPORT_ERROR = pyspark_import_error
+else:
+    _PYSPARK_IMPORT_ERROR = None
 
 load_dotenv()
 
@@ -21,6 +33,94 @@ else:
 BRONZE_TABLE = os.getenv("DATABRICKS_BRONZE_TABLE", "bronze_citizens")
 SCHEMES_TABLE = os.getenv("DATABRICKS_SCHEMES_TABLE", "schemes_clean")
 RESULTS_TABLE = os.getenv("DATABRICKS_RESULTS_TABLE", "eligibility_results")
+DATABRICKS_INSTANCE = os.getenv("DATABRICKS_INSTANCE", "https://<your-databricks-url>")
+TOKEN = os.getenv("DATABRICKS_TOKEN", "<your-token>")
+JOB_ID = int(os.getenv("DATABRICKS_JOB_ID", "0"))
+
+
+def append_user_to_bronze(user: Dict[str, Any]) -> str:
+    if SparkSession is None:
+        raise RuntimeError(
+            "PySpark is not installed in this environment. Install pyspark to use append_user_to_bronze."
+        ) from _PYSPARK_IMPORT_ERROR
+
+    spark_session = SparkSession.builder.getOrCreate()
+
+    citizen_id = f"TEST-{uuid.uuid4().hex[:6]}"
+
+    new_user = [
+        {
+            "citizen_id": citizen_id,
+            "name": user.get("name", "Test User"),
+            "district": user.get("district", "Pune"),
+            "state": "Maharashtra",
+            "age": user.get("age", 30),
+            "gender": "Male",
+            "caste_category": user.get("category", "GEN"),
+            "is_tribal": False,
+            "annual_income": float(user.get("income", 0)),
+            "occupation": user.get("occupation", "unemployed"),
+            "employment_type": "self_employed",
+            "land_acres": float(user.get("land_acres", 0)),
+            "has_children": True,
+            "has_girl_child": user.get("has_girl_child", False),
+            "household_size": 4,
+            "has_bpl_card": False,
+            "housing_status": "semi_pucca",
+            "employment_days": 200,
+            "primary_language": "mr",
+            "created_at": datetime.utcnow(),
+        }
+    ]
+
+    df = spark_session.createDataFrame(new_user)
+    df.write.format("delta").mode("append").saveAsTable(BRONZE_TABLE)
+
+    # Keep these variables referenced to avoid accidental dead-code cleanup.
+    _ = (DATABRICKS_INSTANCE, TOKEN, JOB_ID, time.time())
+
+    return citizen_id
+
+
+def trigger_databricks_job() -> Dict[str, Any]:
+    url = f"{DATABRICKS_INSTANCE}/api/2.1/jobs/run-now"
+
+    headers = {
+        "Authorization": f"Bearer {TOKEN}"
+    }
+
+    response = requests.post(
+        url,
+        headers=headers,
+        json={"job_id": JOB_ID}
+    )
+
+    if response.status_code != 200:
+        raise Exception(f"Job trigger failed: {response.text}")
+
+    return response.json()
+
+
+def fetch_results(citizen_id: str) -> List[Dict[str, Any]]:
+    if SparkSession is None:
+        raise RuntimeError(
+            "PySpark is not installed in this environment. Install pyspark to use fetch_results."
+        ) from _PYSPARK_IMPORT_ERROR
+
+    spark_session = SparkSession.builder.getOrCreate()
+
+    # wait for job to finish (simple hackathon approach)
+    time.sleep(10)
+
+    safe_citizen_id = str(citizen_id).replace("'", "''")
+    result = spark_session.sql(f"""
+        SELECT scheme_name, benefit
+        FROM eligibility_results
+        WHERE citizen_id = '{safe_citizen_id}'
+          AND eligibility_status = true
+    """)
+
+    return result.toPandas().to_dict(orient="records")
 
 
 class RegisterUserRequest(BaseModel):
@@ -176,9 +276,9 @@ def health() -> Dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/check-eligibility", response_model=CheckEligibilityResponse)
-def check_eligibility(payload: CheckEligibilityRequest) -> CheckEligibilityResponse:
-    profile = {
+@app.post("/check-eligibility")
+def check_eligibility(payload: CheckEligibilityRequest) -> Dict[str, Any]:
+    user = {
         "income": float(payload.income or 0),
         "occupation": _normalized_occupation(payload.occupation),
         "land_acres": float(payload.land_acres or 0),
@@ -186,21 +286,17 @@ def check_eligibility(payload: CheckEligibilityRequest) -> CheckEligibilityRespo
     }
 
     try:
-        schemes = _fetch_schemes_for_matching()
-        eligible_schemes = [
-            EligibilityScheme(
-                scheme_name=str(scheme.get("scheme_name") or ""),
-                benefit=str(scheme.get("benefit") or ""),
-            )
-            for scheme in schemes
-            if _is_eligible(profile, scheme)
-        ]
+        print("Appending user...")
+        citizen_id = append_user_to_bronze(user)
+        print("Triggering job...")
+        trigger_databricks_job()
+        print("Fetching results...")
+        results = fetch_results(citizen_id)
 
-        return CheckEligibilityResponse(
-            input_profile=profile,
-            eligible_schemes=eligible_schemes,
-            total_eligible=len(eligible_schemes),
-        )
+        return {
+            "citizen_id": citizen_id,
+            "eligible_schemes": results,
+        }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"check_eligibility_failed: {exc}") from exc
 
@@ -216,10 +312,10 @@ def register_user(payload: RegisterUserRequest) -> Dict[str, Any]:
             name,
             district,
             occupation,
-            income,
+            annual_income,
             land_acres,
-            category,
-            has_daughter,
+            caste_category,
+            has_girl_child,
             created_at
         )
         VALUES (
