@@ -16,7 +16,6 @@ Output Delta table:
 from __future__ import annotations
 
 import re
-from pathlib import Path
 from typing import Optional
 
 from pyspark.sql import DataFrame, SparkSession
@@ -39,32 +38,12 @@ def get_spark() -> SparkSession:
 
 
 def read_schemes_csv(spark_session: SparkSession) -> DataFrame:
-    # Spark in Databricks requires absolute paths; select an existing absolute candidate first.
-    candidate_paths = [Path.cwd() / "data" / "updated_data.csv"]
+    path = "/Workspace/Users/oditi.ecell@gmail.com/bharatbricks_hackathon/data/updated_data.csv"
 
-    if "__file__" in globals():
-        candidate_paths.append(Path(__file__).resolve().parents[1] / "data" / "updated_data.csv")
-
-    resolved_path: Optional[Path] = None
-    for path in candidate_paths:
-        candidate = path.resolve()
-        if candidate.exists():
-            resolved_path = candidate
-            break
-
-    if resolved_path is None:
-        all_candidates = [str(path.resolve()) for path in candidate_paths]
-        raise RuntimeError(f"Could not locate schemes CSV. Checked paths={all_candidates}")
-
-    spark_path = resolved_path.as_posix()
-    if not spark_path.startswith("/"):
-        raise RuntimeError(f"Resolved CSV path is not absolute: {spark_path}")
-
-    # Use file URI form for compatibility with Databricks serverless/runtime path handling.
     return (
         spark_session.read.option("header", True)
         .option("inferSchema", True)
-        .csv(f"file:{spark_path}")
+        .csv(path)
     )
 
 
