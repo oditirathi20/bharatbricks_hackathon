@@ -1,117 +1,157 @@
 """
-Adhikar-Aina | Bronze Layer - Citizens
+Adhikar-Aina | 01 Bronze Citizens
 
 Purpose:
-- Build and load synthetic/raw citizen records into Bronze Delta table.
+- Create or load citizen data into bronze layer.
+- Generate deterministic synthetic citizens (50-100 rows) when no source exists.
 
-Creates:
-- workspace.default.aa_citizens_bronze
+Output Delta table:
+- bronze_citizens
 """
 
-# ── CELL 1 ────────────────────────────────────────────────────────────────────
+from __future__ import annotations
 
-spark.sql("USE CATALOG workspace")
-spark.sql("USE default")
+import random
+import uuid
+from datetime import datetime
+from typing import List
 
-print("Catalog:", spark.sql("SELECT current_catalog()").collect()[0][0])
-print("Schema: ", spark.sql("SELECT current_database()").collect()[0][0])
-print("✅ Ready")
-# ── CELL 2 ────────────────────────────────────────────────────────────────────
-from pyspark.sql.types import *
-import pyspark.sql.functions as F   # ✅ FIXED (no wildcard import)
+from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import functions as F
+from pyspark.sql.types import (
+    BooleanType,
+    DoubleType,
+    StringType,
+    StructField,
+    StructType,
+    TimestampType,
+)
 
-import uuid, hashlib, random
-from datetime import datetime, date, timedelta
+BRONZE_TABLE = "bronze_citizens"
 
-print("✅ Imports done")
-# ── CELL 3 ────────────────────────────────────────────────────────────────────
-citizen_schema = StructType([
-    StructField("citizen_id",        StringType(),  False),
-    StructField("aadhaar_hash",      StringType(),  False),
-    StructField("district",          StringType(),  True),
-    StructField("taluka",            StringType(),  True),
-    StructField("village",           StringType(),  True),
-    StructField("ward_no",           IntegerType(), True),
-    StructField("survey_no",         StringType(),  True),
-    StructField("land_acres",        DoubleType(),  True),
-    StructField("annual_income",     DoubleType(),  True),
-    StructField("caste_category",    StringType(),  True),
-    StructField("is_tribal",         BooleanType(), True),
-    StructField("has_girl_child",    BooleanType(), True),
-    StructField("girl_child_dob",    DateType(),    True),
-    StructField("has_bpl_card",      BooleanType(), True),
-    StructField("housing_status",    StringType(),  True),
-    StructField("has_electricity",   BooleanType(), True),
-    StructField("has_water_source",  BooleanType(), True),
-    StructField("employment_days",   IntegerType(), True),
-    StructField("created_at",        TimestampType(), True),
-    StructField("updated_at",        TimestampType(), True),
-    StructField("data_source",       StringType(),  True),
-])
 
-print("✅ Schema defined")
-# ── CELL 4 ────────────────────────────────────────────────────────────────────
-random.seed(42)
+def get_spark() -> SparkSession:
+    try:
+        return spark  # type: ignore[name-defined]
+    except NameError:
+        return SparkSession.builder.appName("adhikar-aina-01-bronze").getOrCreate()
 
-DISTRICTS = ["Satara", "Kolhapur", "Sangli"]
-TALUKAS   = ["Koregaon", "Patan", "Karad", "Wai"]
-VILLAGES  = ["Koregaon Panchayat", "Masur", "Umbraj", "Khatav", "Shirval"]
-CASTES    = ["SC", "ST", "OBC", "GEN"]
-HOUSING   = ["kutcha", "semi_pucca", "pucca"]
-SOURCES   = ["civil_registry", "agriculture_dept", "health_dept"]
 
-def make_citizen(i):
-    caste    = random.choice(CASTES)
-    is_trib  = (caste == "ST") and (random.random() < 0.7)
-    has_girl = random.random() < 0.35
-
-    girl_dob = (
-        date.today() - timedelta(days=random.randint(1, 365*5))
-        if has_girl else None
+def citizen_schema() -> StructType:
+    return StructType(
+        [
+            StructField("citizen_id", StringType(), False),
+            StructField("name", StringType(), False),
+            StructField("district", StringType(), True),
+            StructField("occupation", StringType(), True),
+            StructField("income", DoubleType(), True),
+            StructField("land_acres", DoubleType(), True),
+            StructField("category", StringType(), True),
+            StructField("has_daughter", BooleanType(), True),
+            StructField("created_at", TimestampType(), True),
+        ]
     )
 
-    # ✅ FIX: Python round (safe now)
-    income = round(random.uniform(30000, 250000), 2)
-    land   = round(random.uniform(0.5, 8.0), 2)
 
-    created = datetime.now() - timedelta(days=random.randint(0, 730))
-    raw_id  = f"CITIZEN_{i:06d}_{random.randint(1000,9999)}"
+def generate_synthetic_citizens(row_count: int = 80, seed: int = 42) -> List[dict]:
+    random.seed(seed)
 
-    return {
-        "citizen_id":       str(uuid.uuid4()),
-        "aadhaar_hash":     hashlib.sha256(raw_id.encode()).hexdigest(),
-        "district":         random.choice(DISTRICTS),
-        "taluka":           random.choice(TALUKAS),
-        "village":          random.choice(VILLAGES),
-        "ward_no":          random.randint(1, 4),
-        "survey_no":        f"{random.randint(100,250)}/{random.randint(1,10)}",
-        "land_acres":       float(land),
-        "annual_income":    float(income),
-        "caste_category":   caste,
-        "is_tribal":        is_trib,
-        "has_girl_child":   has_girl,
-        "girl_child_dob":   girl_dob,
-        "has_bpl_card":     (income < 80000) and (random.random() < 0.75),
-        "housing_status":   random.choice(HOUSING) if income < 150000 else "pucca",
-        "has_electricity":  (income > 60000) or (random.random() < 0.6),
-        "has_water_source": random.random() < 0.65,
-        "employment_days":  random.randint(0, 100),
-        "created_at":       created,
-        "updated_at":       datetime.now(),
-        "data_source":      random.choice(SOURCES),
+    first_names = [
+        "Asha",
+        "Rohan",
+        "Sunita",
+        "Kiran",
+        "Mahesh",
+        "Savita",
+        "Arjun",
+        "Neha",
+        "Vijay",
+        "Pooja",
+    ]
+    last_names = ["Patil", "Sharma", "Yadav", "Jadhav", "Kumar", "Singh", "More", "Rathod"]
+    districts = ["satara", "kolhapur", "nagpur", "nashik", "pune", "solapur"]
+    occupations = ["farmer", "laborer", "artisan", "teacher", "shopkeeper", "student", "unemployed"]
+    categories = ["SC", "ST", "OBC", "GEN"]
+
+    records = []
+    for idx in range(row_count):
+        occupation = random.choices(
+            occupations,
+            weights=[35, 18, 10, 8, 12, 6, 11],
+            k=1,
+        )[0]
+
+        if occupation == "farmer":
+            income = round(random.uniform(90000, 450000), 2)
+            land_acres = round(random.uniform(0.3, 6.0), 2)
+        elif occupation in {"laborer", "unemployed"}:
+            income = round(random.uniform(30000, 220000), 2)
+            land_acres = round(random.uniform(0.0, 1.2), 2)
+        else:
+            income = round(random.uniform(80000, 700000), 2)
+            land_acres = round(random.uniform(0.0, 2.5), 2)
+
+        name = f"{random.choice(first_names)} {random.choice(last_names)}"
+
+        records.append(
+            {
+                "citizen_id": f"CIT-{idx + 1:05d}-{uuid.uuid4().hex[:6].upper()}",
+                "name": name,
+                "district": random.choice(districts),
+                "occupation": occupation,
+                "income": income,
+                "land_acres": land_acres,
+                "category": random.choice(categories),
+                "has_daughter": random.random() < 0.42,
+                "created_at": datetime.utcnow(),
+            }
+        )
+
+    return records
+
+
+def build_bronze_dataframe(spark_session: SparkSession, row_count: int = 80) -> DataFrame:
+    synthetic_rows = generate_synthetic_citizens(row_count=row_count)
+    return spark_session.createDataFrame(synthetic_rows, schema=citizen_schema())
+
+
+def write_bronze(df: DataFrame) -> None:
+    (
+        df.write.format("delta")
+        .mode("overwrite")
+        .option("overwriteSchema", "true")
+        .saveAsTable(BRONZE_TABLE)
+    )
+
+
+def run_generation_tests(df: DataFrame) -> None:
+    total_rows = df.count()
+    assert total_rows >= 50, f"Expected >= 50 rows, found {total_rows}"
+
+    occupation_counts = {
+        row["occupation"]: row["count"]
+        for row in df.groupBy("occupation").count().collect()
     }
+    assert occupation_counts.get("farmer", 0) > 0, "Expected farmer records"
 
-records = [make_citizen(i) for i in range(1000)]
+    income_range = df.select(F.min("income").alias("min_income"), F.max("income").alias("max_income")).first()
+    assert income_range["min_income"] < 100000, "Expected low income citizens"
+    assert income_range["max_income"] > 400000, "Expected high income citizens"
 
-df = spark.createDataFrame(records, schema=citizen_schema)
+    land_range = df.select(F.min("land_acres").alias("min_land"), F.max("land_acres").alias("max_land")).first()
+    assert land_range["max_land"] >= 3.0, "Expected citizens with larger land holdings"
 
-print(f"✅ Generated {df.count()} citizen records")
-# ── CELL 5 ────────────────────────────────────────────────────────────────────
-(df.write
-   .format("delta")
-   .mode("overwrite")
-   .option("overwriteSchema", "true")
-   .partitionBy("district")
-   .saveAsTable("workspace.default.aa_citizens_bronze"))
+    print("[TEST-1] Synthetic generation passed")
+    print(f"[TEST-1] rows={total_rows}, occupations={occupation_counts}")
 
-print("✅ Table written: workspace.default.aa_citizens_bronze")
+
+def main() -> None:
+    spark_session = get_spark()
+    bronze_df = build_bronze_dataframe(spark_session, row_count=80)
+    write_bronze(bronze_df)
+    run_generation_tests(bronze_df)
+    print(f"Bronze citizens written to Delta table: {BRONZE_TABLE}")
+
+
+if __name__ == "__main__":
+    main()

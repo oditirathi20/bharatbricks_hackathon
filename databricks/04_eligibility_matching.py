@@ -1,112 +1,171 @@
 """
-Adhikar-Aina | Eligibility Matching
+Adhikar-Aina | 04 Eligibility Matching
 
 Purpose:
-- Match citizen attributes against scheme logic and produce eligibility output.
+- Deterministically match citizens to schemes using Spark DataFrame logic.
 
-Creates:
-- workspace.default.aa_eligibility_results
+Input Delta tables:
+- silver_citizens
+- schemes_clean
+
+Output Delta table:
+- eligibility_results
+
+Output schema:
+- citizen_id
+- scheme_name
+- benefit
+- eligibility_status
 """
 
-import pyspark.sql.functions as F
-from pyspark.sql.types import *
+from __future__ import annotations
 
-spark.sql("USE CATALOG workspace")
-spark.sql("USE default")
+from typing import Any, Dict
 
-spark.conf.set("spark.sql.shuffle.partitions", "8")
+from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import functions as F
 
-df_citizens = spark.table("workspace.default.aa_citizens_for_llm")
-df_schemes  = spark.table("workspace.default.aa_schemes")
+SILVER_TABLE = "silver_citizens"
+SCHEMES_TABLE = "schemes_clean"
+RESULTS_TABLE = "eligibility_results"
 
-print(f"Citizens : {df_citizens.count()}")
-print(f"Schemes  : {df_schemes.count()}")
 
-df_citizens_enriched = df_citizens.withColumn(
-    "citizen_tags",
-    F.concat_ws(",",
-        F.when(F.col("housing_status").isin("kutcha","semi_pucca"), F.lit("housing")),
-        F.when(F.col("has_bpl_card") == True, F.lit("health")),
-        F.when(F.col("has_girl_child") == True, F.lit("women,nutrition,education")),
-        F.when(F.col("is_tribal") == True, F.lit("tribal")),
-        F.when(F.col("caste_category") == "SC", F.lit("sc")),
-        F.when(F.col("caste_category") == "ST", F.lit("st")),
-        F.when(F.col("employment_days") < 100, F.lit("employment")),
-        F.when(F.col("has_electricity") == False, F.lit("solar")),
-        F.when(F.col("land_category").isin("marginal","small","medium"), F.lit("agriculture")),
-        F.when(F.col("income_bracket").isin("EWS","LIG"), F.lit("ews_lig")),
-        F.when(F.col("income_bracket").isin("EWS","LIG","MIG"), F.lit("ews_lig_mig")),
+def get_spark() -> SparkSession:
+    try:
+        return spark  # type: ignore[name-defined]
+    except NameError:
+        return SparkSession.builder.appName("adhikar-aina-04-matching").getOrCreate()
+
+
+def match_citizens_to_schemes(citizens_df: DataFrame, schemes_df: DataFrame) -> DataFrame:
+    citizens = (
+        citizens_df.select(
+            "citizen_id",
+            F.lower(F.trim(F.coalesce(F.col("occupation"), F.lit("")))).alias("occupation_norm"),
+            F.coalesce(F.col("income").cast("double"), F.lit(0.0)).alias("income_norm"),
+            F.coalesce(F.col("land_acres").cast("double"), F.lit(0.0)).alias("land_norm"),
+            F.upper(F.trim(F.coalesce(F.col("category"), F.lit("GEN")))).alias("category_norm"),
+        )
     )
-)
 
-df_schemes_enriched = df_schemes.withColumn(
-    "scheme_tag",
-    F.when(F.col("eligibility_sql").contains("housing_status"), F.lit("housing"))
-     .when(F.col("eligibility_sql").contains("is_tribal"), F.lit("tribal"))
-     .when(F.col("eligibility_sql").contains("has_girl_child"), F.lit("women"))
-     .when(F.col("eligibility_sql").contains("caste_category = 'SC'"), F.lit("sc"))
-     .when(F.col("eligibility_sql").contains("caste_category = 'ST'"), F.lit("st"))
-     .when(F.col("eligibility_sql").contains("employment_days"), F.lit("employment"))
-     .when(F.col("eligibility_sql").contains("has_electricity"), F.lit("solar"))
-     .when(F.col("eligibility_sql").contains("land_acres"), F.lit("agriculture"))
-     .otherwise(F.lit("ews_lig"))
-)
-
-df_results = (
-    df_citizens_enriched.alias("c")
-    .join(df_schemes_enriched.alias("s"),
-        F.col("c.citizen_tags").contains(F.col("s.scheme_tag")),
-        "inner"
+    schemes = (
+        schemes_df.select(
+            "scheme_name",
+            "benefit",
+            F.coalesce(F.col("min_income").cast("double"), F.lit(0.0)).alias("min_income_norm"),
+            F.coalesce(F.col("max_income").cast("double"), F.lit(100000000.0)).alias("max_income_norm"),
+            F.coalesce(F.col("max_land").cast("double"), F.lit(999999.0)).alias("max_land_norm"),
+            F.lower(F.trim(F.coalesce(F.col("occupation"), F.lit("any")))).alias("occupation_req"),
+            F.upper(F.trim(F.coalesce(F.col("category"), F.lit("ANY")))).alias("category_req"),
+        )
     )
-    .select(
-        F.col("c.citizen_id"),
-        F.col("c.district"),
-        F.col("c.taluka"),
-        F.col("c.village"),
-        F.col("c.income_bracket"),
-        F.col("c.caste_category"),
-        F.col("c.is_tribal"),
-        F.col("s.scheme_id"),
-        F.col("s.short_code"),
-        F.col("s.scheme_name"),
-        F.col("s.benefit_amount").alias("benefit"),
-        F.col("s.required_docs"),
-        F.lit(False).alias("is_notified"),
-        F.current_timestamp().alias("matched_at"),
+
+    matched = citizens.crossJoin(F.broadcast(schemes)).withColumn(
+        "eligibility_status",
+        (
+            (F.col("income_norm") >= F.col("min_income_norm"))
+            & (F.col("income_norm") <= F.col("max_income_norm"))
+            & (F.col("land_norm") <= F.col("max_land_norm"))
+            & (
+                (F.col("occupation_req") == F.lit("any"))
+                | (F.col("occupation_norm") == F.col("occupation_req"))
+            )
+            & (
+                (F.col("category_req") == F.lit("ANY"))
+                | (F.col("category_norm") == F.col("category_req"))
+            )
+        ),
     )
-)
 
-total = df_results.count()
-print(f"✅ Total eligibility matches: {total:,}")
+    return matched.select("citizen_id", "scheme_name", "benefit", "eligibility_status")
 
-(df_results.write
-    .format("delta")
-    .mode("overwrite")
-    .option("overwriteSchema", "true")
-    .partitionBy("district")
-    .saveAsTable("workspace.default.aa_eligibility_results"))
 
-print("✅ aa_eligibility_results written")
+def write_results(df: DataFrame) -> None:
+    (
+        df.write.format("delta")
+        .mode("overwrite")
+        .option("overwriteSchema", "true")
+        .saveAsTable(RESULTS_TABLE)
+    )
 
-spark.sql("""
-    SELECT district, village,
-        COUNT(DISTINCT citizen_id) AS eligible_citizens,
-        COUNT(DISTINCT scheme_id)  AS schemes_available
-    FROM workspace.default.aa_eligibility_results
-    GROUP BY district, village
-    ORDER BY eligible_citizens DESC
-""").show(20, truncate=False)
 
-spark.sql("""
-    SELECT scheme_name,
-        COUNT(DISTINCT citizen_id) AS citizens_to_notify
-    FROM workspace.default.aa_eligibility_results
-    WHERE is_notified = false
-    GROUP BY scheme_name
-    ORDER BY citizens_to_notify DESC
-    LIMIT 10
-""").show(truncate=False)
+def evaluate_single_profile(profile: Dict[str, Any], schemes_df: DataFrame) -> DataFrame:
+    spark_session = get_spark()
+    one_row = [
+        (
+            "TEST-CITIZEN",
+            profile.get("occupation", ""),
+            float(profile.get("income", 0.0)),
+            float(profile.get("land_acres", 0.0)),
+            profile.get("category", "GEN"),
+        )
+    ]
+    schema = "citizen_id string, occupation string, income double, land_acres double, category string"
+    test_citizen_df = spark_session.createDataFrame(one_row, schema=schema)
+    return match_citizens_to_schemes(test_citizen_df, schemes_df)
 
-total = spark.table("workspace.default.aa_eligibility_results").count()
-print(f"\n✅ PULSE COMPLETE — {total:,} eligibility matches across 3,397 schemes and 1,000 citizens")
-print("▶ Ready for Notebook 05 — Adhikar Certificate")
+
+def run_tests(citizens_df: DataFrame, schemes_df: DataFrame, results_df: DataFrame) -> None:
+    # Test 2: primary matching case
+    test_profile = {
+        "income": 300000,
+        "occupation": "farmer",
+        "land_acres": 1.5,
+        "category": "OBC",
+    }
+    test2_df = evaluate_single_profile(test_profile, schemes_df).filter(F.col("eligibility_status") == F.lit(True))
+    test2_count = test2_df.count()
+    assert test2_count >= 1, f"Expected at least 1 eligible scheme, found {test2_count}"
+    print(f"[TEST-2] Matching logic passed with eligible schemes={test2_count}")
+
+    # Test 3a: no matching schemes
+    no_match_profile = {
+        "income": 99999999,
+        "occupation": "astronaut",
+        "land_acres": 1000,
+        "category": "GEN",
+    }
+    test3a_count = evaluate_single_profile(no_match_profile, schemes_df).filter(F.col("eligibility_status") == F.lit(True)).count()
+    assert test3a_count == 0, f"Expected 0 for no-match case, found {test3a_count}"
+
+    # Test 3b: missing values
+    missing_profile = {
+        "income": None,
+        "occupation": None,
+        "land_acres": None,
+        "category": None,
+    }
+    test3b_df = evaluate_single_profile(missing_profile, schemes_df)
+    assert test3b_df.count() > 0, "Missing value test should still evaluate without failure"
+
+    # Test 3c: extreme income low
+    low_income_profile = {
+        "income": 0,
+        "occupation": "laborer",
+        "land_acres": 0,
+        "category": "SC",
+    }
+    test3c_df = evaluate_single_profile(low_income_profile, schemes_df)
+    assert test3c_df.count() > 0, "Extreme low income test should still evaluate"
+
+    assert results_df.count() > 0, "eligibility_results should not be empty"
+
+    print("[TEST-3] Edge cases passed (no-match, missing values, extreme income)")
+
+
+def main() -> None:
+    spark_session = get_spark()
+    citizens_df = spark_session.table(SILVER_TABLE)
+    schemes_df = spark_session.table(SCHEMES_TABLE)
+
+    results_df = match_citizens_to_schemes(citizens_df, schemes_df)
+    write_results(results_df)
+
+    print(f"Eligibility results written to Delta table: {RESULTS_TABLE}")
+    results_df.groupBy("eligibility_status").count().show()
+
+    run_tests(citizens_df, schemes_df, results_df)
+
+
+if __name__ == "__main__":
+    main()
