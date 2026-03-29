@@ -2,9 +2,6 @@
 
 > A comprehensive, multilingual citizen-centric portal for discovering and accessing government welfare schemes with voice-enabled accessibility across 22+ Indian languages.
 
-**Live Demo**: http://localhost:5173  
-**API Documentation**: http://127.0.0.1:8000/docs
-
 ---
 
 ## 📋 Table of Contents
