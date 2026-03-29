@@ -36,3 +36,61 @@ export async function getEligibilityResults(citizenId, profile) {
     }
   }
 }
+
+export async function requestTtsAudio(text, language) {
+  const response = await fetch(`${API_BASE_URL}/api/tts`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      text,
+      language,
+    }),
+  })
+
+  if (!response.ok) {
+    const detail = await response.text()
+    throw new Error(detail || "tts_failed")
+  }
+
+  return response.blob()
+}
+
+export async function runEligibilityFlow(profile) {
+  try {
+    const response = await axios.post(`${API_BASE_URL}/check-eligibility`, profile, {
+      timeout: 600000,
+      headers: { "Content-Type": "application/json" },
+    })
+
+    return {
+      ok: true,
+      data: response.data,
+      schemes: response?.data?.eligible_schemes || [],
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      data: null,
+      schemes: buildMockSchemes(profile),
+      error: error?.message || "eligibility_flow_failed",
+    }
+  }
+}
+
+export async function linkTelegramMapping(payload) {
+  try {
+    const response = await axios.post(`${API_BASE_URL}/api/link-telegram`, payload, {
+      timeout: 10000,
+      headers: { "Content-Type": "application/json" },
+    })
+
+    return { ok: true, data: response.data }
+  } catch (error) {
+    return {
+      ok: false,
+      error: error?.message || "telegram_link_failed",
+    }
+  }
+}

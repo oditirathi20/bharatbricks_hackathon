@@ -1,19 +1,21 @@
 import { useMemo, useState } from "react"
+import { normalizeLanguageCode } from "./languages"
 import { LanguageContext } from "./languageStore"
 
 const DEFAULT_LANGUAGE = "en"
 const STORAGE_KEY = "app_language"
 
 function getInitialLanguage() {
-  return localStorage.getItem(STORAGE_KEY) || DEFAULT_LANGUAGE
+  return normalizeLanguageCode(localStorage.getItem(STORAGE_KEY) || DEFAULT_LANGUAGE)
 }
 
 export function LanguageProvider({ children }) {
   const [language, setLanguage] = useState(getInitialLanguage)
 
   const changeLanguage = (nextLanguage) => {
-    setLanguage(nextLanguage)
-    localStorage.setItem(STORAGE_KEY, nextLanguage)
+    const normalizedLanguage = normalizeLanguageCode(nextLanguage)
+    setLanguage(normalizedLanguage)
+    localStorage.setItem(STORAGE_KEY, normalizedLanguage)
   }
 
   const value = useMemo(

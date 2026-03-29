@@ -1,11 +1,13 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Navigate, useNavigate } from "react-router-dom"
-import LoadingPanel from "../components/LoadingPanel"
 import VoiceQuestionCard from "../components/VoiceQuestionCard"
 import { useAppContext } from "../context/useAppContext"
 import { QUESTIONS_BY_CATEGORY, SUPPORT_CATEGORIES } from "../data/questions"
+import { useLanguage } from "../i18n/useLanguage"
 import { useTranslation } from "../i18n/useTranslation"
-import { getEligibilityResults, registerCitizen } from "../services/api"
+import { voiceConfig } from "../i18n/voiceConfig"
+import { requestTtsAudio } from "../services/api"
+import { runEligibilityFlow } from "../services/api"
 import { buildConfirmationSummary, buildProfileFromAnswers } from "../utils/profile"
 
 const VALUE_TO_TRANSLATION_KEY = {
@@ -23,16 +25,23 @@ function OnboardingPage() {
   const navigate = useNavigate()
   const {
     citizenId,
+    setCitizenId,
     selectedCategory,
     setSelectedCategory,
     answers,
     setAnswers,
     setProfile,
     setResults,
+    setPipelineRunId,
+    setEligibilityExplanation,
   } = useAppContext()
 
   const [step, setStep] = useState(1)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isSpeaking, setIsSpeaking] = useState(false)
+  const [submitStatusText, setSubmitStatusText] = useState("")
+  const audioRef = useRef(null)
+  const { language } = useLanguage()
   const { t } = useTranslation()
 
   const questions = useMemo(
@@ -72,6 +81,57 @@ function OnboardingPage() {
     return <Navigate to="/login" replace />
   }
 
+  useEffect(
+    () => () => {
+      if (audioRef.current) {
+        audioRef.current.pause()
+        audioRef.current = null
+      }
+      window.speechSynthesis?.cancel()
+    },
+    [],
+  )
+
+  const fallbackBrowserSpeak = (text) => {
+    if ("speechSynthesis" in window) {
+      const utterance = new SpeechSynthesisUtterance(text)
+      utterance.lang = voiceConfig[language] || voiceConfig.en
+      window.speechSynthesis.speak(utterance)
+    }
+  }
+
+  const speakText = async (text) => {
+    setIsSpeaking(true)
+
+    try {
+      const audioBlob = await requestTtsAudio(text, language)
+
+      if (audioRef.current) {
+        audioRef.current.pause()
+        audioRef.current = null
+      }
+
+      const audioUrl = URL.createObjectURL(audioBlob)
+      const audio = new Audio(audioUrl)
+      audioRef.current = audio
+
+      audio.onended = () => {
+        URL.revokeObjectURL(audioUrl)
+        setIsSpeaking(false)
+      }
+
+      audio.onerror = () => {
+        URL.revokeObjectURL(audioUrl)
+        setIsSpeaking(false)
+      }
+
+      await audio.play()
+    } catch {
+      setIsSpeaking(false)
+      fallbackBrowserSpeak(text)
+    }
+  }
+
   const updateAnswer = (key, value) => {
     setAnswers((previous) => ({
       ...previous,
@@ -81,16 +141,32 @@ function OnboardingPage() {
 
   const handleSubmit = async () => {
     setIsSubmitting(true)
+    setSubmitStatusText("⏳ Checking your eligibility...")
 
     const payload = buildProfileFromAnswers({ citizenId, answers })
     setProfile(payload)
+    setSubmitStatusText("Running government eligibility engine...")
 
-    await registerCitizen(payload)
-    const resultsResponse = await getEligibilityResults(citizenId, payload)
+    const flowResponse = await runEligibilityFlow(payload)
+    if (flowResponse.ok) {
+      if (flowResponse?.data?.citizen_id) {
+        setCitizenId(flowResponse.data.citizen_id)
+      }
+      setResults(flowResponse.schemes || [])
+      setPipelineRunId(String(flowResponse?.data?.run_id || ""))
+      setEligibilityExplanation(flowResponse?.data?.eligibility_explanation || null)
+      setSubmitStatusText(`✅ You are eligible for ${(flowResponse.schemes || []).length} schemes!`)
+    } else {
+      setResults(flowResponse.schemes || [])
+      setPipelineRunId("")
+      setEligibilityExplanation(null)
+      console.error("Eligibility flow failed:", flowResponse.error)
+    }
 
-    setResults(resultsResponse.schemes)
-    setIsSubmitting(false)
-    navigate("/dashboard")
+    setTimeout(() => {
+      setIsSubmitting(false)
+      navigate("/dashboard")
+    }, 500)
   }
 
   return (
@@ -113,24 +189,63 @@ function OnboardingPage() {
 
           {step === 1 ? (
             <div>
-              <h2 className="text-2xl font-semibold text-slate-900">{t("onboarding.supportPrompt")}</h2>
-              <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-2xl font-semibold text-slate-900">{t("onboarding.supportPrompt")}</h2>
+                <button
+                  type="button"
+                  onClick={() => speakText(t("onboarding.supportPrompt"))}
+                  className="btn btn-ghost rounded-full px-3 py-2 text-xs"
+                  disabled={isSpeaking}
+                  aria-label={t("voice.speaker")}
+                  title={t("voice.speaker")}
+                >
+                  <span aria-hidden="true" className="inline-flex items-center justify-center">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M3 10V14H7L12 19V5L7 10H3Z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M16 9C17.2 10.2 17.2 13.8 16 15" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                      <path d="M19 6C21.8 8.8 21.8 15.2 19 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                    </svg>
+                  </span>
+                </button>
+              </div>
+              <div className="mt-5 grid grid-cols-1 gap-3">
                 {SUPPORT_CATEGORIES.map((categoryOption) => (
-                  <button
+                  <div
                     key={categoryOption.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedCategory(categoryOption.id)
-                      setAnswers({})
-                    }}
-                    className={`rounded-2xl border px-4 py-4 text-left text-sm font-semibold transition ${
+                    className={`rounded-2xl border px-4 py-3.5 transition ${
                       selectedCategory === categoryOption.id
                         ? "border-teal-500 bg-teal-50 text-teal-800 shadow-sm"
                         : "border-slate-200 bg-white text-slate-700 hover:border-teal-300 hover:bg-teal-50/40"
                     }`}
                   >
-                    {t(categoryOption.labelKey)}
-                  </button>
+                    <div className="flex items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedCategory(categoryOption.id)
+                          setAnswers({})
+                        }}
+                        className="flex-1 text-left text-sm font-semibold"
+                      >
+                        {t(categoryOption.labelKey)}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => speakText(t(categoryOption.labelKey))}
+                        className="btn btn-ghost rounded-full px-2.5 py-2"
+                        disabled={isSpeaking}
+                        aria-label={`${t("voice.speaker")}: ${t(categoryOption.labelKey)}`}
+                        title={`${t("voice.speaker")}: ${t(categoryOption.labelKey)}`}
+                      >
+                        <span aria-hidden="true" className="inline-flex items-center justify-center">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M3 10V14H7L12 19V5L7 10H3Z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                            <path d="M16 9C17.2 10.2 17.2 13.8 16 15" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                          </svg>
+                        </span>
+                      </button>
+                    </div>
+                  </div>
                 ))}
               </div>
               <button
@@ -192,11 +307,9 @@ function OnboardingPage() {
               </div>
 
               {isSubmitting ? (
-                <div className="mt-6">
-                  <LoadingPanel
-                    title={t("onboarding.loadingTitle")}
-                    subtitle={t("onboarding.loadingSubtitle")}
-                  />
+                <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                  <p className="font-semibold">{submitStatusText || "⏳ Checking your eligibility..."}</p>
+                  <p className="mt-1 text-slate-600">Running government eligibility engine...</p>
                 </div>
               ) : (
                 <div className="mt-6 flex flex-wrap gap-3">

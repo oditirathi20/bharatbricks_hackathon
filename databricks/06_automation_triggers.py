@@ -18,14 +18,25 @@ Output Delta tables:
 from __future__ import annotations
 
 from datetime import datetime
+import os
+import sys
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
+
+try:
+    from telegram_integration import format_new_benefit_message, send_telegram_message_sync
+except ModuleNotFoundError:
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if repo_root not in sys.path:
+        sys.path.append(repo_root)
+    from telegram_integration import format_new_benefit_message, send_telegram_message_sync
 
 SILVER_TABLE = "silver_citizens"
 SCHEMES_TABLE = "schemes_clean"
 RESULTS_TABLE = "eligibility_results"
 SNAPSHOT_TABLE = "schemes_snapshot"
+TELEGRAM_MAPPING_TABLE = "workspace.default.telegram_user_mapping"
 
 
 def get_spark() -> SparkSession:
@@ -108,6 +119,77 @@ def update_snapshot(spark_session: SparkSession) -> None:
     spark_session.table(SCHEMES_TABLE).select("scheme_id").dropDuplicates().write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(SNAPSHOT_TABLE)
 
 
+def _table_has_column(spark_session: SparkSession, table_name: str, column_name: str) -> bool:
+    return column_name in spark_session.table(table_name).columns
+
+
+def notify_newly_eligible(spark_session: SparkSession, newly_eligible_df: DataFrame) -> int:
+    if newly_eligible_df.rdd.isEmpty():
+        return 0
+
+    if not spark_session.catalog.tableExists(TELEGRAM_MAPPING_TABLE):
+        print("[TEST-4] Telegram mapping table not found. Skipping notifications.")
+        return 0
+
+    if not os.getenv("TELEGRAM_BOT_TOKEN"):
+        print("[TEST-4] TELEGRAM_BOT_TOKEN missing. Skipping notifications.")
+        return 0
+
+    candidates = newly_eligible_df.select("citizen_id", "scheme_name", "benefit").dropDuplicates()
+
+    if _table_has_column(spark_session, RESULTS_TABLE, "is_notified"):
+        already_notified = (
+            spark_session.table(RESULTS_TABLE)
+            .filter(F.col("eligibility_status") == F.lit(True))
+            .filter(F.col("is_notified") == F.lit(True))
+            .select("citizen_id", "scheme_name")
+            .dropDuplicates()
+        )
+        candidates = candidates.join(already_notified, on=["citizen_id", "scheme_name"], how="left_anti")
+
+    mapped = (
+        candidates
+        .join(
+            spark_session.table(TELEGRAM_MAPPING_TABLE).select("citizen_id", "telegram_chat_id"),
+            on="citizen_id",
+            how="inner",
+        )
+    )
+
+    rows = mapped.collect()
+    sent = 0
+    sent_pairs = []
+
+    for row in rows:
+        message = format_new_benefit_message(
+            scheme_name=row["scheme_name"],
+            benefit=row["benefit"],
+            action="Visit nearest facilitation center with required documents.",
+        )
+        try:
+            send_telegram_message_sync(chat_id=row["telegram_chat_id"], text=message)
+            sent += 1
+            sent_pairs.append((row["citizen_id"], row["scheme_name"]))
+        except Exception as exc:
+            print(f"[TEST-4] Notification failed for citizen_id={row['citizen_id']}: {exc}")
+
+    if sent_pairs and _table_has_column(spark_session, RESULTS_TABLE, "is_notified"):
+        sent_df = spark_session.createDataFrame(sent_pairs, schema="citizen_id string, scheme_name string")
+        sent_df.createOrReplaceTempView("_sent_notifications")
+        spark_session.sql(
+            f"""
+            MERGE INTO {RESULTS_TABLE} AS target
+            USING _sent_notifications AS source
+            ON target.citizen_id = source.citizen_id
+               AND target.scheme_name = source.scheme_name
+               AND target.eligibility_status = true
+            WHEN MATCHED THEN UPDATE SET is_notified = true
+            """
+        )
+
+    return sent
+
+
 def run_test_4(spark_session: SparkSession) -> None:
     ensure_snapshot_exists(spark_session)
     inserted_scheme_id = append_new_scheme(spark_session)
@@ -118,16 +200,22 @@ def run_test_4(spark_session: SparkSession) -> None:
 
     citizens_df = spark_session.table(SILVER_TABLE)
     new_results_df = _match_with_subset(citizens_df, new_schemes_df)
+    if _table_has_column(spark_session, RESULTS_TABLE, "is_notified"):
+        new_results_df = new_results_df.withColumn("is_notified", F.lit(False))
 
     new_results_df.write.format("delta").mode("append").saveAsTable(RESULTS_TABLE)
 
-    newly_eligible = new_results_df.filter(F.col("eligibility_status") == F.lit(True)).count()
+    newly_eligible_df = new_results_df.filter(F.col("eligibility_status") == F.lit(True))
+    newly_eligible = newly_eligible_df.count()
     assert newly_eligible >= 1, "Expected newly eligible citizens after adding new scheme"
+
+    notifications_sent = notify_newly_eligible(spark_session, newly_eligible_df)
 
     update_snapshot(spark_session)
 
     print(f"[TEST-4] New scheme trigger passed. inserted_scheme_id={inserted_scheme_id}")
     print(f"[TEST-4] new_scheme_count={new_scheme_count}, newly_eligible={newly_eligible}")
+    print(f"[TEST-4] notifications_sent={notifications_sent}")
 
 
 def main() -> None:

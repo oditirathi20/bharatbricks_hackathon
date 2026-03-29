@@ -27,26 +27,48 @@ function LandingPage() {
   ]
 
   return (
-    <main className="page-shell">
-      <div className="page-container max-w-6xl">
-        <div className="top-strip">
-          <LanguageSwitcher />
+    <main className="portal-shell">
+      <header className="portal-header">
+        <div className="portal-header-inner">
+          <div className="portal-brand">
+            <span className="portal-badge">{t("landing.countryTag")}</span>
+            <h1 className="portal-logo">{t("landing.portalName")}</h1>
+          </div>
+
+          <div className="portal-search" role="search" aria-label={t("landing.searchAriaLabel")}>
+            <input
+              className="portal-search-input"
+              placeholder={t("landing.searchPlaceholder")}
+              aria-label={t("landing.searchInputAriaLabel")}
+            />
+            <span className="portal-search-icon" aria-hidden="true">Q</span>
+          </div>
+
+          <div className="portal-header-actions">
+            <button
+              type="button"
+              onClick={() => {
+                resetJourney()
+                navigate("/login")
+              }}
+              className="btn portal-signin"
+            >
+              {t("landing.signInAction")} -&gt;
+            </button>
+            <LanguageSwitcher />
+          </div>
         </div>
+      </header>
 
-        {/* 60/40 split keeps the primary message and CTA dominant while preserving guidance on the right. */}
-        <section className="section-card mt-8 grid overflow-hidden border-gray-200 p-7 shadow-2xl sm:p-10 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:gap-10">
-          <div>
+      <section className="portal-hero">
+        <div className="portal-hero-inner">
+          <article className="portal-hero-copy">
             <p className="chip chip-brand">{t("landing.badge")}</p>
-            <h1 className="page-title mt-5">{t("landing.title")}</h1>
-            <p className="mt-3 text-base font-semibold text-slate-700 sm:text-lg">
-              {t("landing.subtitle")}
-            </p>
-            <p className="mt-3 max-w-2xl text-base leading-relaxed text-slate-600 sm:text-lg">
-              {t("landing.description")}
-            </p>
+            <h2 className="portal-hero-title">{t("landing.title")}</h2>
+            <p className="portal-hero-subtitle">{t("landing.subtitle")}</p>
+            <p className="portal-hero-description">{t("landing.description")}</p>
 
-            {/* Primary CTA uses gradient, motion, and iconography to clearly signal the next action. */}
-            <div className="mt-9 flex flex-wrap gap-3">
+            <div className="portal-hero-cta-row">
               <button
                 type="button"
                 onClick={() => {
@@ -55,34 +77,71 @@ function LandingPage() {
                 }}
                 className="btn btn-primary px-8 py-4 text-base"
               >
-                {t("landing.getStarted")} <span aria-hidden="true" className="text-lg">-&gt;</span>
+                {t("landing.getStarted")} <span aria-hidden="true">-&gt;</span>
               </button>
             </div>
+            <p className="portal-trust">{t("landing.trustIndicator")}</p>
+          </article>
 
-            <p className="mt-3 text-xs font-medium tracking-wide text-slate-500 sm:text-sm">
-              {t("landing.trustIndicator")}
-            </p>
-          </div>
-
-          {/* Step cards provide a premium, scannable explanation of the workflow. */}
-          <aside className="panel-muted mt-8 p-5 lg:mt-0">
-            <p className="eyebrow">{t("landing.howItWorks")}</p>
-            <div className="mt-3 space-y-3">
-              {howItWorks.map((step) => (
-                <article key={step.id} className="step-card">
-                  <div className="flex items-start gap-3">
-                    <span className="step-icon" aria-hidden="true">{step.id}</span>
-                    <div>
-                      <h3 className="text-sm font-bold text-slate-900">{step.title}</h3>
-                      <p className="mt-1 text-xs leading-relaxed text-slate-600 sm:text-sm">{step.description}</p>
-                    </div>
-                  </div>
-                </article>
-              ))}
+          <aside className="portal-hero-gallery" aria-label={t("landing.programHighlightsAriaLabel")}>
+            <div className="gallery-card gallery-card-lg">
+              <p>{t("landing.heroHighlightCitizenServices")}</p>
+            </div>
+            <div className="gallery-grid">
+              <div className="gallery-card">{t("landing.heroHighlightAgriculture")}</div>
+              <div className="gallery-card">{t("landing.heroHighlightEducation")}</div>
+              <div className="gallery-card">{t("landing.heroHighlightHousing")}</div>
+              <div className="gallery-card">{t("landing.heroHighlightWomen")}</div>
             </div>
           </aside>
+        </div>
+      </section>
+
+      <section className="page-container max-w-6xl">
+        <div className="portal-stats">
+          <article className="portal-stat-card">
+            <strong>4680+</strong>
+            <span>{t("landing.totalSchemes")}</span>
+          </article>
+          <article className="portal-stat-card">
+            <strong>650+</strong>
+            <span>{t("landing.centralSchemes")}</span>
+          </article>
+          <article className="portal-stat-card">
+            <strong>4020+</strong>
+            <span>{t("landing.stateSchemes")}</span>
+          </article>
+        </div>
+
+        <section className="section-card mt-8 p-6 sm:p-8">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="eyebrow">{t("landing.howItWorks")}</p>
+            <button
+              type="button"
+              onClick={() => {
+                resetJourney()
+                navigate("/login")
+              }}
+              className="btn btn-soft"
+            >
+              {t("landing.findSchemesForYou")} -&gt;
+            </button>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            {howItWorks.map((step) => (
+              <article key={step.id} className="step-card">
+                <div className="flex items-start gap-3">
+                  <span className="step-icon" aria-hidden="true">{step.id}</span>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900">{step.title}</h3>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-600 sm:text-sm">{step.description}</p>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
         </section>
-      </div>
+      </section>
     </main>
   )
 }

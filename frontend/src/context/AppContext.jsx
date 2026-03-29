@@ -7,12 +7,16 @@ export function AppProvider({ children }) {
   const [answers, setAnswers] = useState({})
   const [profile, setProfile] = useState(null)
   const [results, setResults] = useState([])
+  const [pipelineRunId, setPipelineRunId] = useState("")
+  const [eligibilityExplanation, setEligibilityExplanation] = useState(null)
 
   const resetJourney = () => {
     setSelectedCategory("")
     setAnswers({})
     setProfile(null)
     setResults([])
+    setPipelineRunId("")
+    setEligibilityExplanation(null)
   }
 
   const value = useMemo(
@@ -27,9 +31,13 @@ export function AppProvider({ children }) {
       setProfile,
       results,
       setResults,
+      pipelineRunId,
+      setPipelineRunId,
+      eligibilityExplanation,
+      setEligibilityExplanation,
       resetJourney,
     }),
-    [citizenId, selectedCategory, answers, profile, results],
+    [citizenId, selectedCategory, answers, profile, results, pipelineRunId, eligibilityExplanation],
   )
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>

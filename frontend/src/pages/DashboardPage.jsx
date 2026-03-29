@@ -5,14 +5,23 @@ import SchemeDetailsModal from "../components/SchemeDetailsModal"
 import { useAppContext } from "../context/useAppContext"
 import { ALL_SCHEMES } from "../data/schemes"
 import { useTranslation } from "../i18n/useTranslation"
+import { linkTelegramMapping } from "../services/api"
 
 const FILTERS = ["all", "agriculture", "business", "education", "housing"]
 
 function DashboardPage() {
   const navigate = useNavigate()
-  const { citizenId, selectedCategory, results, resetJourney } = useAppContext()
+  const {
+    citizenId,
+    selectedCategory,
+    results,
+    pipelineRunId,
+    eligibilityExplanation,
+    resetJourney,
+  } = useAppContext()
   const [activeFilter, setActiveFilter] = useState(selectedCategory || "all")
   const [selectedScheme, setSelectedScheme] = useState(null)
+  const [telegramStatus, setTelegramStatus] = useState("")
   const { t } = useTranslation()
 
   const schemeDetailsByName = useMemo(() => {
@@ -55,6 +64,25 @@ function DashboardPage() {
     return <Navigate to="/login" replace />
   }
 
+  const handleSendToTelegram = async () => {
+    const chatId = window.prompt("Enter your Telegram Chat ID")
+    if (!chatId || !String(chatId).trim()) {
+      return
+    }
+
+    setTelegramStatus("Linking Telegram mapping...")
+    const linkResponse = await linkTelegramMapping({
+      citizen_id: citizenId,
+      telegram_chat_id: String(chatId).trim(),
+    })
+
+    if (linkResponse.ok) {
+      setTelegramStatus("✅ Telegram linked. You will receive notifications and certificate updates.")
+    } else {
+      setTelegramStatus("❌ Failed to link Telegram mapping.")
+    }
+  }
+
   return (
     <main className="page-shell">
       <div className="page-container max-w-7xl">
@@ -77,6 +105,29 @@ function DashboardPage() {
           </div>
 
           <div className="mt-7">
+            <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+              <p className="font-semibold">✅ You are eligible for {eligibleSchemes.length} schemes!</p>
+              <p className="mt-1">Pipeline Run ID: {pipelineRunId || "N/A"}</p>
+            </div>
+
+            <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+              <h3 className="font-semibold text-slate-900">Why you are eligible</h3>
+              <p className="mt-1">income_bracket: {eligibilityExplanation?.income_bracket || "N/A"}</p>
+              <p>occupation_category: {eligibilityExplanation?.occupation_category || "N/A"}</p>
+              <p>land_category: {eligibilityExplanation?.land_category || "N/A"}</p>
+            </div>
+
+            <div className="mb-5">
+              <button
+                type="button"
+                onClick={handleSendToTelegram}
+                className="btn btn-primary"
+              >
+                📲 Send to Telegram
+              </button>
+              {telegramStatus ? <p className="mt-2 text-sm text-slate-600">{telegramStatus}</p> : null}
+            </div>
+
             <h2 className="text-2xl font-semibold text-slate-900">{t("dashboard.eligibleSchemes")}</h2>
             {eligibleSchemes.length === 0 ? (
               <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
