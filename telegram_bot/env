@@ -1,0 +1,22 @@
+# ============================================================
+#  ADHIKAR-AINA — Environment Variables
+#  Copy this file to .env and fill in your real values.
+#  NEVER commit .env to version control.
+# ============================================================
+
+
+DATABRICKS_TOKEN = "dapi1aa6f3c22c529168a018ae61e91a2220" 
+TELEGRAM_TOKEN   = "8755526219:AAFE499-bgmggh-e5UuILyZOZ1yjvj2m5ZE"
+HOST             = "https://dbc-8d79a655-2501.cloud.databricks.com"
+VS_INDEX         = "workspace.bronze.welfare_schemes_index" 
+LLM_ENDPOINT     = "databricks-meta-llama-3-3-70b-instruct"
+
+
+OPENAI_API_KEY = "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"
+SARVAM_API_KEY = "sk_gasvr21g_naqCwnkEac6sa66o4wbkiuBn"
+
+
+# ── SARVAM LANGUAGE TARGETS ──────────────────────────────────
+SARVAM_SOURCE_LANG=en-IN
+SARVAM_TARGET_LANG_MARATHI=mr-IN
+SARVAM_TARGET_LANG_HINDI=hi-IN
