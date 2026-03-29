@@ -57,6 +57,29 @@ export async function requestTtsAudio(text, language) {
   return response.blob()
 }
 
+export async function requestSpeechToText(audioBlob) {
+  const formData = new FormData()
+  formData.append("file", audioBlob, "audio.wav")
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/stt`, {
+      method: "POST",
+      body: formData,
+    })
+
+    if (!response.ok) {
+      const detail = await response.text()
+      throw new Error(detail || "stt_failed")
+    }
+
+    const data = await response.json()
+    return { ok: true, text: data.text || data.transcript || "", data }
+  } catch (error) {
+    return { ok: false, text: "", error: error.message }
+  }
+}
+
+
 export async function runEligibilityFlow(profile) {
   try {
     const response = await axios.post(`${API_BASE_URL}/check-eligibility`, profile, {

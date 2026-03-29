@@ -10,7 +10,7 @@ function getInitialLanguage() {
 }
 
 export function LanguageProvider({ children }) {
-  const [language, setLanguage] = useState(getInitialLanguage)
+  const [language, setLanguage] = useState(getInitialLanguage())
 
   const changeLanguage = (nextLanguage) => {
     const normalizedLanguage = normalizeLanguageCode(nextLanguage)

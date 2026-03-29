@@ -1,13 +1,15 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Navigate, useNavigate } from "react-router-dom"
 import SchemeCard from "../components/SchemeCard"
 import SchemeDetailsModal from "../components/SchemeDetailsModal"
+import AdhikarCertificateModal from "../components/AdhikarCertificateModal"
 import { useAppContext } from "../context/useAppContext"
 import { ALL_SCHEMES } from "../data/schemes"
 import { useTranslation } from "../i18n/useTranslation"
 import { linkTelegramMapping } from "../services/api"
 
 const FILTERS = ["all", "agriculture", "business", "education", "housing"]
+const INITIAL_SCHEMES_DISPLAY = 5
 
 function DashboardPage() {
   const navigate = useNavigate()
@@ -15,14 +17,28 @@ function DashboardPage() {
     citizenId,
     selectedCategory,
     results,
+    profile,
     pipelineRunId,
     eligibilityExplanation,
     resetJourney,
   } = useAppContext()
   const [activeFilter, setActiveFilter] = useState(selectedCategory || "all")
   const [selectedScheme, setSelectedScheme] = useState(null)
+  const [certificateScheme, setCertificateScheme] = useState(null)
   const [telegramStatus, setTelegramStatus] = useState("")
+  const [displayedSchemeCount, setDisplayedSchemeCount] = useState(INITIAL_SCHEMES_DISPLAY)
+  const [citizenData, setCitizenData] = useState(null)
   const { t } = useTranslation()
+
+  // Fetch citizen data if not in profile
+  useEffect(() => {
+    if (profile && Object.keys(profile).length > 0) {
+      setCitizenData({
+        citizen_id: citizenId,
+        ...profile,
+      })
+    }
+  }, [profile, citizenId])
 
   const schemeDetailsByName = useMemo(() => {
     const map = {}
@@ -134,11 +150,32 @@ function DashboardPage() {
                 {t("dashboard.noEligibleMessage")}
               </p>
             ) : (
-              <div className="mt-4 grid gap-4 md:grid-cols-2">
-                {eligibleSchemes.map((scheme) => (
-                  <SchemeCard key={scheme.scheme_name} scheme={scheme} onWhyEligible={setSelectedScheme} />
-                ))}
-              </div>
+              <>
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  {eligibleSchemes.slice(0, displayedSchemeCount).map((scheme) => (
+                    <SchemeCard 
+                      key={scheme.scheme_name} 
+                      scheme={scheme} 
+                      onWhyEligible={setSelectedScheme}
+                      onCertificate={setCertificateScheme}
+                    />
+                  ))}
+                </div>
+                {displayedSchemeCount < eligibleSchemes.length && (
+                  <button
+                    type="button"
+                    onClick={() => setDisplayedSchemeCount((prev) => Math.min(prev + 5, eligibleSchemes.length))}
+                    className="btn btn-secondary mt-4 w-full"
+                  >
+                    Load More Schemes ({displayedSchemeCount} of {eligibleSchemes.length})
+                  </button>
+                )}
+                {displayedSchemeCount >= eligibleSchemes.length && eligibleSchemes.length > INITIAL_SCHEMES_DISPLAY && (
+                  <p className="mt-4 text-center text-sm text-slate-600">
+                    Showing all {eligibleSchemes.length} eligible schemes
+                  </p>
+                )}
+              </>
             )}
           </div>
 
@@ -196,6 +233,15 @@ function DashboardPage() {
       </div>
 
       <SchemeDetailsModal scheme={selectedScheme} onClose={() => setSelectedScheme(null)} />
+      
+      {citizenData && certificateScheme && (
+        <AdhikarCertificateModal
+          scheme={certificateScheme}
+          citizen={citizenData}
+          isOpen={!!certificateScheme}
+          onClose={() => setCertificateScheme(null)}
+        />
+      )}
     </main>
   )
 }

@@ -30,6 +30,7 @@ function OnboardingPage() {
     setSelectedCategory,
     answers,
     setAnswers,
+    profile,
     setProfile,
     setResults,
     setPipelineRunId,
@@ -40,9 +41,15 @@ function OnboardingPage() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
   const [submitStatusText, setSubmitStatusText] = useState("")
+  const [retrievedCitizenData, setRetrievedCitizenData] = useState(null)
   const audioRef = useRef(null)
   const { language } = useLanguage()
   const { t } = useTranslation()
+
+  // Check if profile is pre-filled from citizen lookup
+  const isProfileFromCitizenLookup = () => {
+    return profile && (profile.annual_income || profile.land_acres || profile.occupation_category)
+  }
 
   const questions = useMemo(
     () =>
@@ -91,6 +98,14 @@ function OnboardingPage() {
     },
     [],
   )
+
+  // Auto-submit when profile is pre-filled from citizen lookup
+  useEffect(() => {
+    if (isProfileFromCitizenLookup() && !isSubmitting) {
+      console.log("🎯 Auto-submitting with pre-filled citizen data...")
+      handleAutoSubmit()
+    }
+  }, [profile])
 
   const fallbackBrowserSpeak = (text) => {
     if ("speechSynthesis" in window) {
@@ -169,9 +184,71 @@ function OnboardingPage() {
     }, 500)
   }
 
+  const handleAutoSubmit = async () => {
+    setIsSubmitting(true)
+    setSubmitStatusText("⏳ Processing your citizen record...")
+
+    // Use the pre-filled profile directly from citizen lookup
+    const payload = {
+      citizen_id: citizenId,
+      ...profile,
+    }
+    
+    setSubmitStatusText("Running government eligibility engine...")
+
+    const flowResponse = await runEligibilityFlow(payload)
+    if (flowResponse.ok) {
+      if (flowResponse?.data?.citizen_id) {
+        setCitizenId(flowResponse.data.citizen_id)
+      }
+      setResults(flowResponse.schemes || [])
+      setPipelineRunId(String(flowResponse?.data?.run_id || ""))
+      setEligibilityExplanation(flowResponse?.data?.eligibility_explanation || null)
+      setSubmitStatusText(`✅ You are eligible for ${(flowResponse.schemes || []).length} schemes!`)
+    } else {
+      setResults(flowResponse.schemes || [])
+      setPipelineRunId("")
+      setEligibilityExplanation(null)
+      console.error("Eligibility flow failed:", flowResponse.error)
+    }
+
+    setTimeout(() => {
+      setIsSubmitting(false)
+      navigate("/dashboard")
+    }, 500)
+  }
+
   return (
     <main className="page-shell">
       <div className="page-container max-w-6xl">
+        {isProfileFromCitizenLookup() && isSubmitting && (
+          <section className="section-card p-7 sm:p-10 text-center">
+            <div className="mb-6">
+              <div className="inline-block mb-4">
+                <svg className="animate-spin h-12 w-12 text-teal-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+              </div>
+              <h2 className="text-2xl font-bold text-slate-900 mb-2">Processing Your Profile</h2>
+              <p className="text-slate-600 mb-4">{submitStatusText || "Checking your eligibility for government schemes..."}</p>
+            </div>
+            <div className="space-y-2 text-sm">
+              <div className="flex items-center justify-center gap-2 text-slate-600">
+                <span>✓ Citizen record retrieved</span>
+              </div>
+              <div className="flex items-center justify-center gap-2 text-teal-600 font-medium">
+                <svg className="inline-block h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                </svg>
+                <span>Running eligibility checks...</span>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {(!isProfileFromCitizenLookup() || !isSubmitting) && (
+          <>
         <section className="section-card p-7 sm:p-10">
           <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -189,6 +266,21 @@ function OnboardingPage() {
 
           {step === 1 ? (
             <div>
+              {profile && Object.keys(profile).length > 0 && (
+                <div className="mb-6 rounded-lg bg-blue-50 border border-blue-200 p-4">
+                  <h3 className="font-semibold text-blue-900 mb-3">📋 Retrieved Citizen Record</h3>
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 text-sm">
+                    {profile.district && (<div><span className="text-blue-700">District:</span> <span className="font-medium text-blue-900">{profile.district}</span></div>)}
+                    {profile.income && (<div><span className="text-blue-700">Income:</span> <span className="font-medium text-blue-900">₹{Number(profile.income).toLocaleString()}</span></div>)}
+                    {profile.occupation && (<div><span className="text-blue-700">Occupation:</span> <span className="font-medium text-blue-900">{profile.occupation}</span></div>)}
+                    {profile.landAcres && (<div><span className="text-blue-700">Land:</span> <span className="font-medium text-blue-900">{profile.landAcres} acres</span></div>)}
+                    {profile.category && (<div><span className="text-blue-700">Category:</span> <span className="font-medium text-blue-900">{profile.category}</span></div>)}
+                    {profile.hasGirlChild && (<div><span className="text-blue-700">Girl Child:</span> <span className="font-medium text-blue-900">Yes</span></div>)}
+                  </div>
+                  <p className="text-xs text-blue-600 mt-3">You can proceed with this data or modify answers below.</p>
+                </div>
+              )}
+              
               <div className="flex items-center justify-between gap-3">
                 <h2 className="text-2xl font-semibold text-slate-900">{t("onboarding.supportPrompt")}</h2>
                 <button
@@ -332,6 +424,8 @@ function OnboardingPage() {
             </div>
           ) : null}
         </section>
+        </>
+        )}
       </div>
     </main>
   )

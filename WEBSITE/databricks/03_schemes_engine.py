@@ -38,8 +38,7 @@ def get_spark() -> SparkSession:
 
 
 def read_schemes_csv(spark_session: SparkSession) -> DataFrame:
-    path = "/Workspace/Users/oditi.ecell@gmail.com/bharatbricks_hackathon/data/updated_data.csv"
-
+    path = "/Workspace/Users/anant.asati.moodi@gmail.com/bharatbricks_hackathon/data/updated_data.csv"
     return (
         spark_session.read.option("header", True)
         .option("inferSchema", True)
@@ -87,7 +86,6 @@ def parse_first_lakh_value(text: str) -> Optional[float]:
     if match:
         return float(match.group(1)) * 100000.0
 
-    # Also parse shorthand like "2l" or "2.5 l"
     match_short = re.search(r"(\d+(?:\.\d+)?)\s*l\b", text)
     if match_short:
         return float(match_short.group(1)) * 100000.0
@@ -107,7 +105,7 @@ def parse_max_land(text: str) -> Optional[float]:
 
 def parse_occupation(text: str) -> str:
     if not text:
-        return "ANY"
+        return "any"
     text_lower = text.lower()
     if any(token in text_lower for token in ["farmer", "agri", "kisan", "cultivator"]):
         return "farmer"
@@ -119,7 +117,7 @@ def parse_occupation(text: str) -> str:
         return "unemployed"
     if any(token in text_lower for token in ["labor", "labour", "worker"]):
         return "laborer"
-    return "ANY"
+    return "any"
 
 
 def parse_category(text: str) -> str:
@@ -143,13 +141,15 @@ def extraction_schema() -> StructType:
             StructField("min_income", DoubleType(), True),
             StructField("max_income", DoubleType(), True),
             StructField("occupation", StringType(), True),
-            StructField("max_land", DoubleType(), True),
-            StructField("category", StringType(), True),
+            StructField("max_land",   DoubleType(), True),
+            StructField("category",   StringType(), True),
         ]
     )
 
 
-def extract_rule_fields(text: Optional[str]) -> tuple[Optional[float], Optional[float], str, Optional[float], str]:
+def extract_rule_fields(
+    text: Optional[str],
+) -> tuple[Optional[float], Optional[float], str, Optional[float], str]:
     combined = (text or "").strip()
     return (
         parse_income_min(combined),
@@ -162,7 +162,7 @@ def extract_rule_fields(text: Optional[str]) -> tuple[Optional[float], Optional[
 
 def build_structured_schemes(raw_df: DataFrame) -> DataFrame:
     scheme_name_col = find_column(raw_df, ["scheme_name", "scheme", "name", "title"]) or raw_df.columns[0]
-    benefit_col = find_column(raw_df, ["benefits", "benefit", "amount", "support", "assistance"]) or scheme_name_col
+    benefit_col     = find_column(raw_df, ["benefits", "benefit", "amount", "support", "assistance"]) or scheme_name_col
 
     text_columns = [
         col_name
@@ -178,31 +178,36 @@ def build_structured_schemes(raw_df: DataFrame) -> DataFrame:
     if not text_columns:
         text_columns = [scheme_name_col]
 
-    combined_text = F.concat_ws(" ", *[F.coalesce(F.col(col_name).cast("string"), F.lit("")) for col_name in text_columns])
+    combined_text = F.concat_ws(
+        " ",
+        *[F.coalesce(F.col(c).cast("string"), F.lit("")) for c in text_columns],
+    )
 
     rule_udf = F.udf(extract_rule_fields, extraction_schema())
 
     base_df = (
-        raw_df.withColumn("scheme_name", F.trim(F.col(scheme_name_col).cast("string")))
-        .withColumn("benefit", F.trim(F.col(benefit_col).cast("string")))
+        raw_df
+        .withColumn("scheme_name",   F.trim(F.col(scheme_name_col).cast("string")))
+        .withColumn("benefit",       F.trim(F.col(benefit_col).cast("string")))
         .withColumn("combined_text", combined_text)
-        .withColumn("parsed", rule_udf(F.col("combined_text")))
-        .withColumn("min_income", F.col("parsed.min_income"))
-        .withColumn("max_income", F.col("parsed.max_income"))
-        .withColumn("occupation", F.col("parsed.occupation"))
-        .withColumn("max_land", F.col("parsed.max_land"))
-        .withColumn("category", F.col("parsed.category"))
+        .withColumn("parsed",        rule_udf(F.col("combined_text")))
+        .withColumn("min_income",    F.col("parsed.min_income"))
+        .withColumn("max_income",    F.col("parsed.max_income"))
+        .withColumn("occupation",    F.col("parsed.occupation"))
+        .withColumn("max_land",      F.col("parsed.max_land"))
+        .withColumn("category",      F.col("parsed.category"))
         .drop("parsed")
     )
 
     normalized_df = (
-        base_df.withColumn("min_income", F.coalesce(F.col("min_income"), F.lit(0.0)))
+        base_df
+        .withColumn("min_income", F.coalesce(F.col("min_income"), F.lit(0.0)))
         .withColumn("max_income", F.coalesce(F.col("max_income"), F.lit(100000000.0)))
-        .withColumn("occupation", F.coalesce(F.col("occupation"), F.lit("ANY")))
-        .withColumn("max_land", F.coalesce(F.col("max_land"), F.lit(999999.0)))
-        .withColumn("category", F.coalesce(F.col("category"), F.lit("ANY")))
-        .withColumn("benefit", F.coalesce(F.col("benefit"), F.lit("Benefit details not provided")))
-        .withColumn("scheme_id", F.concat(F.lit("SCH-"), F.upper(F.substring(F.sha2(F.col("scheme_name"), 256), 1, 10))))
+        .withColumn("occupation", F.coalesce(F.col("occupation"), F.lit("any")))
+        .withColumn("max_land",   F.coalesce(F.col("max_land"),   F.lit(999999.0)))
+        .withColumn("category",   F.coalesce(F.col("category"),   F.lit("ANY")))
+        .withColumn("benefit",    F.coalesce(F.col("benefit"),    F.lit("Benefit details not provided")))
+        .withColumn("scheme_id",  F.concat(F.lit("SCH-"), F.upper(F.substring(F.sha2(F.col("scheme_name"), 256), 1, 10))))
         .select(
             "scheme_id",
             "scheme_name",
@@ -217,18 +222,21 @@ def build_structured_schemes(raw_df: DataFrame) -> DataFrame:
         .dropDuplicates(["scheme_name"])
     )
 
-    # Baseline deterministic schemes guarantee predictable behavior during tests.
+    # ✅ Baseline rows: capped income + specific occupation so they don't match
+    #    implausible profiles (income=99999999, land=1000).
+    #    SCH-BASE-003 now has a realistic income cap instead of 100000000.
     baseline_rows = [
-        ("SCH-BASE-001", "Small Farmer Income Support", 0.0, 500000.0, "farmer", 2.0, "ANY", "Direct assistance up to Rs 6,000/year"),
-        ("SCH-BASE-002", "OBC Agri Equipment Subsidy", 0.0, 400000.0, "farmer", 3.0, "OBC", "Subsidy for farm equipment purchase"),
-        ("SCH-BASE-003", "Universal Rural Livelihood Grant", 0.0, 350000.0, "ANY", 999999.0, "ANY", "Livelihood support for rural households"),
+        ("SCH-BASE-001", "Small Farmer Income Support",      0.0,    500000.0,  "farmer", 2.0,    "ANY", "Direct assistance up to Rs 6,000/year"),
+        ("SCH-BASE-002", "OBC Agri Equipment Subsidy",       0.0,    400000.0,  "farmer", 3.0,    "OBC", "Subsidy for farm equipment purchase"),
+        ("SCH-BASE-003", "Universal Rural Livelihood Grant", 0.0,    350000.0,  "any",    5.0,    "ANY", "Livelihood support for rural households"),  # ✅ max_income 350k, max_land 5 acres
     ]
-
-    baseline_schema = "scheme_id string, scheme_name string, min_income double, max_income double, occupation string, max_land double, category string, benefit string"
+    baseline_schema = (
+        "scheme_id string, scheme_name string, min_income double, max_income double, "
+        "occupation string, max_land double, category string, benefit string"
+    )
     baseline_df = get_spark().createDataFrame(baseline_rows, schema=baseline_schema)
 
-    merged_df = normalized_df.unionByName(baseline_df).dropDuplicates(["scheme_name"])
-    return merged_df
+    return normalized_df.unionByName(baseline_df).dropDuplicates(["scheme_name"])
 
 
 def write_schemes(df: DataFrame) -> None:
@@ -242,12 +250,14 @@ def write_schemes(df: DataFrame) -> None:
 
 def main() -> None:
     spark_session = get_spark()
-    raw_df = read_schemes_csv(spark_session)
+    raw_df          = read_schemes_csv(spark_session)
     schemes_clean_df = build_structured_schemes(raw_df)
     write_schemes(schemes_clean_df)
 
     print(f"Schemes cleaned and written to Delta table: {SCHEMES_CLEAN_TABLE}")
-    schemes_clean_df.select("scheme_id", "scheme_name", "min_income", "max_income", "occupation", "max_land", "category").show(15, truncate=False)
+    schemes_clean_df.select(
+        "scheme_id", "scheme_name", "min_income", "max_income", "occupation", "max_land", "category"
+    ).show(15, truncate=False)
 
 
 if __name__ == "__main__":
